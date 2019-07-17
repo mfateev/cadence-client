@@ -115,13 +115,13 @@ type (
 
 	// Single case statement of the Select
 	selectCase struct {
-		channel     *channelImpl                // Channel of this case.
-		receiveFunc *func(c Channel, more bool) // function to call when channel has a message. nil for send case.
+		channel     *channelImpl               // Channel of this case.
+		receiveFunc func(c Channel, more bool) // function to call when channel has a message. nil for send case.
 
-		sendFunc   *func()         // function to call when channel accepted a message. nil for receive case.
-		sendValue  *interface{}    // value to send to the channel. Used only for send case.
-		future     asyncFuture     // Used for future case
-		futureFunc *func(f Future) // function to call when Future is ready
+		sendFunc   func()         // function to call when channel accepted a message. nil for receive case.
+		sendValue  interface{}    // value to send to the channel. Used only for send case.
+		future     asyncFuture    // Used for future case
+		futureFunc func(f Future) // function to call when Future is ready
 	}
 
 	// Implements Selector interface
@@ -920,12 +920,20 @@ func (d *dispatcherImpl) StackTrace() string {
 }
 
 func (s *selectorImpl) AddReceive(c Channel, f func(c Channel, more bool)) Selector {
-	s.cases = append(s.cases, &selectCase{channel: c.(*channelImpl), receiveFunc: &f})
+	s.cases = append(s.cases, &selectCase{channel: c.(*channelImpl), receiveFunc: f})
+	return s
+}
+
+func (s *selectorImpl) AddReceiveSignal(ctx Context, signalName string, valuePtr interface{}) Selector {
+	ch := GetSignalChannel(ctx, signalName)
+	s.AddReceive(ch, func(c Channel, more bool) {
+		c.Receive(ctx, valuePtr)
+	})
 	return s
 }
 
 func (s *selectorImpl) AddSend(c Channel, v interface{}, f func()) Selector {
-	s.cases = append(s.cases, &selectCase{channel: c.(*channelImpl), sendFunc: &f, sendValue: &v})
+	s.cases = append(s.cases, &selectCase{channel: c.(*channelImpl), sendFunc: f, sendValue: &v})
 	return s
 }
 
@@ -934,7 +942,13 @@ func (s *selectorImpl) AddFuture(future Future, f func(future Future)) Selector 
 	if !ok {
 		panic("cannot chain Future that wasn't created with workflow.NewFuture")
 	}
-	s.cases = append(s.cases, &selectCase{future: asyncF, futureFunc: &f})
+	s.cases = append(s.cases, &selectCase{future: asyncF, futureFunc: f})
+	return s
+}
+
+func (s *selectorImpl) AddTimer(ctx Context, d time.Duration) Selector {
+	timeout := NewTimer(ctx, d)
+	s.AddFuture(timeout, nil)
 	return s
 }
 
@@ -954,7 +968,7 @@ func (s *selectorImpl) Select(ctx Context) {
 
 	for _, pair := range s.cases {
 		if pair.receiveFunc != nil {
-			f := *pair.receiveFunc
+			f := pair.receiveFunc
 			c := pair.channel
 			callback := &receiveCallback{
 				fn: func(v interface{}, more bool) bool {
@@ -984,10 +998,10 @@ func (s *selectorImpl) Select(ctx Context) {
 				c.removeReceiveCallback(callback)
 			})
 		} else if pair.sendFunc != nil {
-			f := *pair.sendFunc
+			f := pair.sendFunc
 			c := pair.channel
 			callback := &sendCallback{
-				value: *pair.sendValue,
+				value: pair.sendValue,
 				fn: func() bool {
 					if readyBranch != nil {
 						return false
@@ -998,7 +1012,7 @@ func (s *selectorImpl) Select(ctx Context) {
 					return true
 				},
 			}
-			ok := c.sendAsyncImpl(*pair.sendValue, callback)
+			ok := c.sendAsyncImpl(pair.sendValue, callback)
 			if ok {
 				// Select() returns in this case/branch. The callback won't be called for this case. However, callback
 				// will be called for previous cases/branches. We should set readyBranch so that when other case/branch
@@ -1014,7 +1028,7 @@ func (s *selectorImpl) Select(ctx Context) {
 			})
 		} else if pair.futureFunc != nil {
 			p := pair
-			f := *p.futureFunc
+			f := p.futureFunc
 			callback := &receiveCallback{
 				fn: func(v interface{}, more bool) bool {
 					if readyBranch != nil {

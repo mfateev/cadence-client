@@ -75,10 +75,20 @@ type (
 	// Selector must be used instead of native go select by workflow code.
 	// Use workflow.NewSelector(ctx) method to create a Selector instance.
 	Selector interface {
+		// On Select calls f when c has a value
 		AddReceive(c Channel, f func(c Channel, more bool)) Selector
+		// On Select consumes value from a signal channel
+		AddReceiveSignal(ctx Context, signalName string, valuePtr interface{}) Selector
+		// On Select sends value to the channel when channel has capacity to accept one
 		AddSend(c Channel, v interface{}, f func()) Selector
+		// On Select calls f when future is ready. Called once per future even if Select is called multiple times.
 		AddFuture(future Future, f func(f Future)) Selector
+		// Unblocks Select after d passed.
+		AddTimer(ctx Context, d time.Duration) Selector
+		// Called on Select when none of the above methods matched.
 		AddDefault(f func())
+		// Tries to match one of the conditions set up in the above methods and invoke an appropriate handler.
+		// Order of invocation is not defined and is not related to order in which Add... calls were made.
 		Select(ctx Context)
 	}
 
