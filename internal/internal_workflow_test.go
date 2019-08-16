@@ -359,6 +359,45 @@ func TestActivityCancellation(t *testing.T) {
 	require.NoError(t, env.GetWorkflowError())
 }
 
+func ChildWorkflowToCancel(ctx Context) (result []byte, err error) {
+	err = Sleep(ctx, time.Hour)
+	if err != nil {
+		return
+	}
+	return []byte("foo"), nil
+}
+
+type testChildWorkflowCancellation struct {
+	t *testing.T
+}
+
+func (w *testChildWorkflowCancellation) Execute(ctx Context, input []byte) (result []byte, err error) {
+	cwo := ChildWorkflowOptions{
+		ExecutionStartToCloseTimeout: 20 * time.Minute,
+	}
+	ctx = WithChildWorkflowOptions(ctx, cwo)
+	ctx1, c1 := WithCancel(ctx)
+
+	f := ExecuteChildWorkflow(ctx1, ChildWorkflowToCancel)
+	c1()
+	err = f.Get(ctx, nil)
+	if err != nil {
+		return
+	}
+	return []byte("workflow-completed"), nil
+}
+
+func TestChildWorkflowCancellation(t *testing.T) {
+	ts := &WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	w := &testChildWorkflowCancellation{t: t}
+	RegisterWorkflow(w.Execute)
+	RegisterWorkflow(ChildWorkflowToCancel)
+	env.ExecuteWorkflow(w.Execute, []byte{1, 2})
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+}
+
 type sayGreetingActivityRequest struct {
 	Name     string
 	Greeting string
